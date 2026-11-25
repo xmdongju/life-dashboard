@@ -99,12 +99,23 @@ jobs:
             await page.locator('[data-subtab=wallet].is-active').waitFor();
             console.log('WALLET',width,'opened in settings');
             await page.locator('[data-subtab=account]').click();
-            const dlPromise=page.waitForEvent('download');
+            const exportResponse=page.waitForResponse(res=>new URL(res.url()).pathname==='/api/v1/export');
+            const dlPromise=page.waitForEvent('download',{timeout:4500}).catch(()=>null);
             await page.locator('[data-action=export-data]').click();
+            const response=await exportResponse;
+            const received=await response.json();
+            await page.locator('[data-export-status=success],[data-export-status=error]').first().waitFor();
+            const outcome=await page.locator('[data-export-status]').first().innerText();
+            const version=received.data?.schema_version;
             const dl=await dlPromise;
-            const envelope=JSON.parse(await readFile(await dl.path(),'utf8'));
-            assert.ok(envelope.checksum&&envelope.schema_version,'Missing backup checksum or version');
-            console.log('EXPORT',width,'downloaded and parsed',dl.suggestedFilename(),envelope.schema_version);
+            if(dl){
+              const envelope=JSON.parse(await readFile(await dl.path(),'utf8'));
+              assert.ok(envelope.checksum&&envelope.schema_version);
+              console.log('EXPORT',JSON.stringify({width,status:response.status(),version,download:true}));
+            }else{
+              console.log('EXPORT',JSON.stringify({width,status:response.status(),version,download:false,outcome}));
+              findings.push({width,route:'/settings',issue:'backup-download-missing',version});
+            }
             await nav('/');
             await page.locator('#ld-home-minimal-toggle-btn').click();
             await page.locator('[data-home-mode=minimal]').waitFor();
