@@ -1,0 +1,82 @@
+name: One-time v0.3 merge smoke
+on:
+  push:
+    branches: ['audit/2026-11-25-pr3-smoke']
+    paths: ['.github/workflows/pr3-audit.yml']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: life_dashboard
+          POSTGRES_PASSWORD: disposable-smoke-only
+          POSTGRES_DB: life_dashboard_v03_test
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 4s --health-timeout 3s --health-retries 15
+    defaults:
+      run:
+        working-directory: v0.3
+    env:
+      NODE_ENV: test
+      PHASE3_ACCEPTANCE: codex-phase3
+      PHASE2_ACCEPTANCE: codex
+      ACCEPTANCE_PROJECT: life-dashboard-v0-3
+      DATABASE_HOST: postgres-test
+      DATABASE_NAME: life_dashboard_v03_test
+      DATABASE_USER: life_dashboard
+      POSTGRES_PASSWORD: disposable-smoke-only
+      LOCAL_LOGIN_SECRET: isolated-smoke-only-synthetic-login-phrase
+      APP_ORIGIN: http://localhost:18380
+      V03_AI_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 7120d0c94f1a5314547838fd496780d661555290
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prepare isolated services and locked packages
+        run: |
+          echo '127.0.0.1 postgres-test gateway-test' | sudo tee -a /etc/hosts
+          npm install --global pnpm@10.18.3
+          pnpm install --frozen-lockfile --prod=false
+          pnpm exec tsx packages/db/src/migrate.ts
+      - name: Types, web bundle and form rendering
+        run: |
+          pnpm exec tsc --noEmit
+          node scripts/build-web.mjs
+          pnpm exec tsx apps/web/scripts/verify-web.ts
+          pnpm exec tsx --test --test-concurrency=1 apps/web/tests/*.test.ts
+      - name: Core business rules and PR gateway
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx --test --test-concurrency=1 tests/*.test.ts tests/ai/*.test.ts tests/v03-phase1/schedule.test.ts tests/v03-phase1/gateway.test.ts
+      - name: Records, tasks, trends, wallets, achievements, profile and restore
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx --test --test-concurrency=1 tests/integration/*.test.ts tests/v02-phase1/api.test.ts tests/v02-phase2/profile-wallet.test.ts tests/v02-phase2/tasks-series.test.ts tests/v02-phase2/trends.test.ts tests/v02-phase2/proposals.test.ts
+      - name: AI plans, approvals, undo, reports and schedules
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx --test --test-concurrency=1 tests/v03-phase1/planning.test.ts tests/v03-phase1/closeout.test.ts tests/v03-phase2/*.test.ts
+      - name: Start the real web and API with a synthetic model
+        if: ${{ !cancelled() }}
+        run: |
+          pnpm exec playwright install chromium --with-deps
+          pnpm exec tsx tests/v03-phase2/init.ts
+          sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80
+          pnpm exec tsx tests/v03-phase2/server.ts > "$RUNNER_TEMP/ld-api.log" 2>&1 &
+          pnpm exec tsx tests/v03-phase2/worker.ts > "$RUNNER_TEMP/ld-worker.log" 2>&1 &
+          WEB_PORT=80 WEB_HOST=127.0.0.1 API_PROXY_TARGET=http://127.0.0.1:3001 APP_ORIGIN=http://gateway-test node apps/web/dev-server.mjs > "$RUNNER_TEMP/ld-web.log" 2>&1 &
+          for i in {1..40}; do if curl --noproxy '*' -fsS http://gateway-test/health/ready > /dev/null; then exit 0; fi; sleep 1; done
+          exit 1
+      - name: Desktop and phone browser journeys
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx tests/v03-phase2/browser.ts
+      - name: Browser correction, rollback and source amounts
+        if: ${{ !cancelled() }}
+        run: pnpm exec tsx tests/v03-phase2/closeout-browser.ts
