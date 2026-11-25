@@ -59,6 +59,8 @@ jobs:
         run: pnpm exec tsx --test --test-concurrency=1 tests/*.test.ts tests/ai/*.test.ts tests/v03-phase1/schedule.test.ts tests/v03-phase1/gateway.test.ts
       - name: Records, tasks, trends, wallets, achievements, profile and restore
         if: ${{ !cancelled() }}
+        env:
+          APP_PROFILE: development
         run: pnpm exec tsx --test --test-concurrency=1 tests/integration/*.test.ts tests/v02-phase1/api.test.ts tests/v02-phase2/profile-wallet.test.ts tests/v02-phase2/tasks-series.test.ts tests/v02-phase2/trends.test.ts tests/v02-phase2/proposals.test.ts
       - name: AI plans, approvals, undo, reports and schedules
         if: ${{ !cancelled() }}
